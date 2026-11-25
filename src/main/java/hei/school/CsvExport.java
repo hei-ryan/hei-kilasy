@@ -1,6 +1,10 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -19,32 +23,39 @@ public class CsvExport {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private GradeCalculator gradeCalculator;
+
     @GetMapping("/exports/grades.csv")
     public ResponseEntity<String> export() {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT st.reference, st.full_name, st.email, st.cohort, e.title, e.deadline, s.submitted_at, s.raw_points, e.max_points, "
-                        + "(s.submitted_at::date > e.deadline) AS late "
+                "SELECT st.reference, st.full_name, st.email, st.cohort, e.title, e.deadline, s.submitted_at, "
+                        + "s.raw_points, e.max_points "
                         + "FROM submission s JOIN student st ON st.id = s.student_id JOIN exercise e ON e.id = s.exercise_id "
                         + "ORDER BY st.full_name, e.deadline");
 
         StringBuilder csv = new StringBuilder();
+
         csv.append("reference;etudiant;email;promotion;exercice;echeance;soumis_le;en_retard;note_sur_20\n");
+
         for (Map<String, Object> row : rows) {
+            LocalDate deadline = ((Date) row.get("deadline")).toLocalDate();
+            LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
             String note = "";
             if (row.get("raw_points") != null) {
-                double n = ((BigDecimal) row.get("raw_points")).doubleValue()
-                        / ((BigDecimal) row.get("max_points")).doubleValue() * 20;
-                n = Math.floor(n * 10) / 10;
-                note = String.valueOf(n).replace('.', ',');
+                BigDecimal raw = (BigDecimal) row.get("raw_points");
+                BigDecimal max = (BigDecimal) row.get("max_points");
+                note = gradeCalculator.penalizedGrade(raw, max, deadline, submittedAt)
+                        .toPlainString().replace('.', ',');
             }
             csv.append(row.get("reference")).append(';')
                     .append(row.get("full_name")).append(';')
                     .append(row.get("email")).append(';')
                     .append(row.get("cohort")).append(';')
                     .append(row.get("title")).append(';')
-                    .append(row.get("deadline")).append(';')
-                    .append(row.get("submitted_at")).append(';')
-                    .append(Boolean.TRUE.equals(row.get("late")) ? "oui" : "non").append(';')
+                    .append(deadline).append(';')
+                    .append(submittedAt).append(';')
+                    .append(gradeCalculator.isLate(deadline, submittedAt) ? "oui" : "non").append(';')
                     .append(note).append('\n');
         }
 

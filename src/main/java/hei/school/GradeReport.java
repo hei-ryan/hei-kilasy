@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -23,6 +22,9 @@ public class GradeReport {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private GradeCalculator gradeCalculator;
 
     public Map<String, Object> build(long studentId) {
         List<Map<String, Object>> students = jdbcTemplate.queryForList("SELECT * FROM student WHERE id = ?", studentId);
@@ -56,14 +58,14 @@ public class GradeReport {
             } else {
                 LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
                 line.put("submittedAt", submittedAt);
-                line.put("late", submittedAt.toLocalDate().isAfter(deadline));
+                line.put("late", gradeCalculator.isLate(deadline, submittedAt));
                 if (row.get("raw_points") == null) {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal grade = gradeCalculator.penalizedGrade(raw, max, deadline, submittedAt);
                     line.put("status", "CORRIGÉ");
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));
