@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: kilasy
       POSTGRES_PASSWORD: kilasy
     ports:
-      - "5432:5432"
+      - "5433:5432"
 
   # Development mail server: emails sent by Kilasy
   # are visible at http://localhost:8025
