@@ -6,6 +6,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +24,22 @@ public class GradeReport {
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
+
+    private static BigDecimal penalizedGrade(
+            BigDecimal raw, BigDecimal max, LocalDate deadline, LocalDate submittedDay) {
+        if (max.signum() <= 0) {
+            throw new IllegalArgumentException("max doit être strictement positif");
+        }
+
+        long lateDays = submittedDay.isAfter(deadline)
+                ? ChronoUnit.DAYS.between(deadline, submittedDay)
+                : 0;
+        BigDecimal penalty = BigDecimal.valueOf(Math.min(lateDays, 5), 1);
+
+        return raw.multiply(BigDecimal.valueOf(20))
+                .multiply(BigDecimal.ONE.subtract(penalty))
+                .divide(max, 1, RoundingMode.HALF_UP);
+    }
 
     public Map<String, Object> build(long studentId) {
         List<Map<String, Object>> students = jdbcTemplate.queryForList("SELECT * FROM student WHERE id = ?", studentId);
@@ -63,7 +80,7 @@ public class GradeReport {
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal grade = penalizedGrade(raw, max, deadline, submittedAt.toLocalDate());
                     line.put("status", "CORRIGÉ");
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));

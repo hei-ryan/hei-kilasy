@@ -1,6 +1,9 @@
 package hei.school;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -19,6 +22,22 @@ public class CsvExport {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    private static BigDecimal penalizedGrade(
+            BigDecimal raw, BigDecimal max, LocalDate deadline, LocalDate submittedDay) {
+        if (max.signum() <= 0) {
+            throw new IllegalArgumentException("max doit être strictement positif");
+        }
+
+        long lateDays = submittedDay.isAfter(deadline)
+                ? ChronoUnit.DAYS.between(deadline, submittedDay)
+                : 0;
+        BigDecimal penalty = BigDecimal.valueOf(Math.min(lateDays, 5), 1);
+
+        return raw.multiply(BigDecimal.valueOf(20))
+                .multiply(BigDecimal.ONE.subtract(penalty))
+                .divide(max, 1, RoundingMode.HALF_UP);
+    }
+
     @GetMapping("/exports/grades.csv")
     public ResponseEntity<String> export() {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
@@ -32,10 +51,11 @@ public class CsvExport {
         for (Map<String, Object> row : rows) {
             String note = "";
             if (row.get("raw_points") != null) {
-                double n = ((BigDecimal) row.get("raw_points")).doubleValue()
-                        / ((BigDecimal) row.get("max_points")).doubleValue() * 20;
-                n = Math.floor(n * 10) / 10;
-                note = String.valueOf(n).replace('.', ',');
+                BigDecimal raw = (BigDecimal) row.get("raw_points");
+                BigDecimal max = (BigDecimal) row.get("max_points");
+                LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+                LocalDate submittedDay = ((java.sql.Timestamp) row.get("submitted_at")).toLocalDateTime().toLocalDate();
+                note = penalizedGrade(raw, max, deadline, submittedDay).toPlainString().replace('.', ',');
             }
             csv.append(row.get("reference")).append(';')
                     .append(row.get("full_name")).append(';')
