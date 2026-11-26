@@ -29,6 +29,9 @@ public class SubmissionController {
     @Autowired
     private JavaMailSender mailSender;
 
+    @Autowired
+    private GradeCalculator gradeCalculator;
+
     @PostMapping("/exercises/{id}/submissions")
     public ResponseEntity<?> submit(@PathVariable long id, @RequestBody Map<String, Object> body) {
         if (body.get("studentId") == null) {
@@ -59,8 +62,9 @@ public class SubmissionController {
         }
 
         LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
-        LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        LocalDateTime now = gradeCalculator.now();
+        int daysLate = gradeCalculator.lateDays(now, deadline);
+        boolean late = daysLate > 0;
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -71,6 +75,7 @@ public class SubmissionController {
         result.put("id", submissionId);
         result.put("submittedAt", now);
         result.put("late", late);
+        result.put("lateDays", daysLate);
         result.put("message", late ? "Soumission enregistrée, mais en retard" : "Soumission enregistrée");
         return ResponseEntity.status(201).body(result);
     }
@@ -86,6 +91,7 @@ public class SubmissionController {
         Map<String, Object> row = rows.get(0);
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
+        int daysLate = gradeCalculator.lateDays(submittedAt, deadline);
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", row.get("id"));
@@ -94,12 +100,13 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
+        result.put("late", daysLate > 0);
+        result.put("lateDays", daysLate);
         if (row.get("raw_points") != null) {
-            double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
-            result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            BigDecimal raw = (BigDecimal) row.get("raw_points");
+            BigDecimal max = (BigDecimal) row.get("max_points");
+            result.put("rawPoints", raw.doubleValue());
+            result.put("grade", gradeCalculator.penalizedGrade(raw, max, submittedAt, deadline));
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -130,14 +137,14 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
+        BigDecimal raw = BigDecimal.valueOf(points);
+        BigDecimal maxPoints = (BigDecimal) row.get("max_points");
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        int daysLate = gradeCalculator.lateDays(submittedAt, deadline);
+        BigDecimal grade = gradeCalculator.penalizedGrade(raw, maxPoints, submittedAt, deadline);
+        String gradeText = grade.toPlainString().replace('.', ',');
 
-        // notify the student by email
         String fullName = (String) row.get("full_name");
         String firstName = fullName.split(" ")[0];
         String title = (String) row.get("title");
@@ -146,7 +153,10 @@ public class SubmissionController {
         message.setTo((String) row.get("email"));
         message.setSubject("Kilasy : nouvelle note pour " + title);
         String text = "Bonjour " + firstName + ",\n\n"
-                + "Ta note pour « " + title + " » est disponible : " + grade + "/20.\n";
+                + "Ta note pour « " + title + " » est disponible : " + gradeText + "/20.\n";
+        if (daysLate > 0) {
+            text += "Soumission rendue avec " + daysLate + " jour(s) de retard : pénalité appliquée.\n";
+        }
         if (feedback != null && !feedback.isBlank()) {
             text += "\nCommentaire de l'enseignant : " + feedback + "\n";
         }
@@ -160,7 +170,8 @@ public class SubmissionController {
         result.put("rawPoints", points);
         result.put("maxPoints", max);
         result.put("grade", grade);
-        result.put("late", late);
+        result.put("late", daysLate > 0);
+        result.put("lateDays", daysLate);
         result.put("feedback", feedback);
         return ResponseEntity.ok(result);
     }

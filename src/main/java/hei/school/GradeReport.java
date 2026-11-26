@@ -24,6 +24,9 @@ public class GradeReport {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private GradeCalculator gradeCalculator;
+
     public Map<String, Object> build(long studentId) {
         List<Map<String, Object>> students = jdbcTemplate.queryForList("SELECT * FROM student WHERE id = ?", studentId);
         if (students.isEmpty()) {
@@ -47,7 +50,7 @@ public class GradeReport {
             line.put("deadline", deadline);
 
             if (row.get("submission_id") == null) {
-                if (deadline.isBefore(LocalDate.now())) {
+                if (deadline.isBefore(gradeCalculator.today())) {
                     line.put("status", "NON RENDU");
                 } else {
                     line.put("status", "À RENDRE");
@@ -55,16 +58,19 @@ public class GradeReport {
                 line.put("grade", null);
             } else {
                 LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
+                int daysLate = gradeCalculator.lateDays(submittedAt, deadline);
                 line.put("submittedAt", submittedAt);
-                line.put("late", submittedAt.toLocalDate().isAfter(deadline));
+                line.put("late", daysLate > 0);
+                line.put("lateDays", daysLate);
                 if (row.get("raw_points") == null) {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal grade = gradeCalculator.penalizedGrade(raw, max, submittedAt, deadline);
                     line.put("status", "CORRIGÉ");
+                    line.put("rawPoints", raw);
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));
                     total = total.add(grade);

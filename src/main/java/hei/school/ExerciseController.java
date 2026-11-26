@@ -20,6 +20,9 @@ public class ExerciseController {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    private GradeCalculator gradeCalculator;
+
     @GetMapping("/exercises")
     public List<Exercise> list() {
         return jdbcTemplate.query("SELECT * FROM exercise ORDER BY deadline", (rs, i) -> {
@@ -67,7 +70,7 @@ public class ExerciseController {
         } catch (Exception ex) {
             return ResponseEntity.badRequest().body(Map.of("error", "L'échéance est obligatoire (format AAAA-MM-JJ)"));
         }
-        if (deadline.isBefore(LocalDate.now())) {
+        if (deadline.isBefore(gradeCalculator.today())) {
             return ResponseEntity.badRequest().body(Map.of("error", "L'échéance doit être dans le futur"));
         }
         double maxPoints = 20;
