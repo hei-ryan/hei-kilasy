@@ -60,7 +60,7 @@ public class SubmissionController {
 
         LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
         LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        boolean late = GradeCalculator.lateDays(deadline, now) > 0;
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -86,6 +86,7 @@ public class SubmissionController {
         Map<String, Object> row = rows.get(0);
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
+        long lateDays = GradeCalculator.lateDays(deadline, submittedAt);
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", row.get("id"));
@@ -94,12 +95,12 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
+        result.put("late", lateDays > 0);
         if (row.get("raw_points") != null) {
             double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
+            BigDecimal max = (BigDecimal) row.get("max_points");
             result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            result.put("grade", GradeCalculator.calculate((BigDecimal) row.get("raw_points"), max, lateDays));
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -122,7 +123,8 @@ public class SubmissionController {
             return ResponseEntity.status(404).body(Map.of("error", "Soumission introuvable"));
         }
         Map<String, Object> row = rows.get(0);
-        double max = ((BigDecimal) row.get("max_points")).doubleValue();
+        BigDecimal maxPoints = (BigDecimal) row.get("max_points");
+        double max = maxPoints.doubleValue();
         if (points < 0 || points > max) {
             return ResponseEntity.badRequest().body(Map.of("error", "Les points doivent être entre 0 et " + max));
         }
@@ -130,12 +132,11 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        long lateDays = GradeCalculator.lateDays(deadline, submittedAt);
+        BigDecimal grade = GradeCalculator.calculate(BigDecimal.valueOf(points), maxPoints, lateDays);
+        boolean late = lateDays > 0;
 
         // notify the student by email
         String fullName = (String) row.get("full_name");
