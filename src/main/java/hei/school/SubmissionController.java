@@ -2,17 +2,22 @@ package hei.school;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+
+import hei.school.application.ExerciseRepository;
+import hei.school.application.GradeNotifications;
+import hei.school.application.GradePublished;
+import hei.school.domain.GradeRules;
+import hei.school.domain.SubmissionWindow;
+import hei.school.infrastructure.JdbcExerciseRepository;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,7 +32,10 @@ public class SubmissionController {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private JavaMailSender mailSender;
+    private ExerciseRepository exerciseRepository;
+
+    @Autowired
+    private GradeNotifications gradeNotifications;
 
     @PostMapping("/exercises/{id}/submissions")
     public ResponseEntity<?> submit(@PathVariable long id, @RequestBody Map<String, Object> body) {
@@ -44,8 +52,8 @@ public class SubmissionController {
             return ResponseEntity.badRequest().body(Map.of("error", "Le lien doit pointer vers GitHub"));
         }
 
-        List<Map<String, Object>> exercises = jdbcTemplate.queryForList("SELECT * FROM exercise WHERE id = ?", id);
-        if (exercises.isEmpty()) {
+        Optional<Exercise> exercise = exerciseRepository.findById(id);
+        if (exercise.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("error", "Exercice introuvable"));
         }
         List<Map<String, Object>> students = jdbcTemplate.queryForList("SELECT * FROM student WHERE id = ?", studentId);
@@ -58,9 +66,21 @@ public class SubmissionController {
             return ResponseEntity.status(409).body(Map.of("error", "Cet étudiant a déjà soumis cet exercice"));
         }
 
-        LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
+        SubmissionWindow window = exercise.get().window();
         LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        if (window.isTimed()) {
+            Optional<LocalDateTime> startedAt = exerciseRepository.findStart(id, studentId);
+            if (startedAt.isEmpty()) {
+                return ResponseEntity.status(422).body(Map.of("error",
+                        "Cet exercice est minuté : démarrez-le avec POST /exercises/" + id + "/start avant de soumettre"));
+            }
+            if (window.isTimeOver(startedAt.get(), now)) {
+                return ResponseEntity.status(422).body(Map.of("error",
+                        "Temps écoulé : l'exercice durait " + window.durationMinutes() + " minutes et a été démarré à "
+                                + startedAt.get()));
+            }
+        }
+        boolean late = window.isLate(now);
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -78,13 +98,13 @@ public class SubmissionController {
     @GetMapping("/submissions/{id}")
     public ResponseEntity<?> get(@PathVariable long id) {
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT s.*, e.title, e.deadline, e.max_points FROM submission s JOIN exercise e ON e.id = s.exercise_id WHERE s.id = ?",
+                "SELECT s.*, e.title, e.deadline, e.duration_minutes, e.max_points FROM submission s JOIN exercise e ON e.id = s.exercise_id WHERE s.id = ?",
                 id);
         if (rows.isEmpty()) {
             return ResponseEntity.status(404).body(Map.of("error", "Soumission introuvable"));
         }
         Map<String, Object> row = rows.get(0);
-        LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+        SubmissionWindow window = JdbcExerciseRepository.windowOf(row);
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
 
         Map<String, Object> result = new HashMap<>();
@@ -94,12 +114,12 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
+        result.put("late", window.isLate(submittedAt));
         if (row.get("raw_points") != null) {
-            double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
-            result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            BigDecimal raw = (BigDecimal) row.get("raw_points");
+            BigDecimal max = (BigDecimal) row.get("max_points");
+            result.put("rawPoints", raw.doubleValue());
+            result.put("grade", GradeRules.penalizedGrade(raw, max, window, submittedAt).doubleValue());
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -114,7 +134,7 @@ public class SubmissionController {
         String feedback = (String) body.get("feedback");
 
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT s.*, e.title, e.deadline, e.max_points, st.full_name, st.email, st.phone "
+                "SELECT s.*, e.title, e.deadline, e.duration_minutes, e.max_points, st.full_name, st.email, st.phone "
                         + "FROM submission s JOIN exercise e ON e.id = s.exercise_id JOIN student st ON st.id = s.student_id "
                         + "WHERE s.id = ?",
                 id);
@@ -130,30 +150,14 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
-        LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
+        SubmissionWindow window = JdbcExerciseRepository.windowOf(row);
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        boolean late = window.isLate(submittedAt);
+        double grade = GradeRules.penalizedGrade(BigDecimal.valueOf(points), (BigDecimal) row.get("max_points"),
+                window, submittedAt).doubleValue();
 
-        // notify the student by email
-        String fullName = (String) row.get("full_name");
-        String firstName = fullName.split(" ")[0];
-        String title = (String) row.get("title");
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom("notes@kilasy.test");
-        message.setTo((String) row.get("email"));
-        message.setSubject("Kilasy : nouvelle note pour " + title);
-        String text = "Bonjour " + firstName + ",\n\n"
-                + "Ta note pour « " + title + " » est disponible : " + grade + "/20.\n";
-        if (feedback != null && !feedback.isBlank()) {
-            text += "\nCommentaire de l'enseignant : " + feedback + "\n";
-        }
-        text += "\nL'équipe Kilasy";
-        message.setText(text);
-        mailSender.send(message);
-        System.out.println("Email de note envoyé à " + row.get("email"));
+        gradeNotifications.publish(new GradePublished((String) row.get("full_name"), (String) row.get("email"),
+                (String) row.get("phone"), (String) row.get("title"), grade, feedback));
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", id);
