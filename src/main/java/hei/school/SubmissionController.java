@@ -8,13 +8,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import hei.school.application.GradeNotifications;
+import hei.school.application.GradePublished;
 import hei.school.domain.GradeRules;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -29,7 +29,7 @@ public class SubmissionController {
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
-    private JavaMailSender mailSender;
+    private GradeNotifications gradeNotifications;
 
     @PostMapping("/exercises/{id}/submissions")
     public ResponseEntity<?> submit(@PathVariable long id, @RequestBody Map<String, Object> body) {
@@ -138,23 +138,8 @@ public class SubmissionController {
         double grade = GradeRules.penalizedGrade(BigDecimal.valueOf(points), (BigDecimal) row.get("max_points"),
                 deadline, submittedAt).doubleValue();
 
-        // notify the student by email
-        String fullName = (String) row.get("full_name");
-        String firstName = fullName.split(" ")[0];
-        String title = (String) row.get("title");
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom("notes@kilasy.test");
-        message.setTo((String) row.get("email"));
-        message.setSubject("Kilasy : nouvelle note pour " + title);
-        String text = "Bonjour " + firstName + ",\n\n"
-                + "Ta note pour « " + title + " » est disponible : " + grade + "/20.\n";
-        if (feedback != null && !feedback.isBlank()) {
-            text += "\nCommentaire de l'enseignant : " + feedback + "\n";
-        }
-        text += "\nL'équipe Kilasy";
-        message.setText(text);
-        mailSender.send(message);
-        System.out.println("Email de note envoyé à " + row.get("email"));
+        gradeNotifications.publish(new GradePublished((String) row.get("full_name"), (String) row.get("email"),
+                (String) row.get("phone"), (String) row.get("title"), grade, feedback));
 
         Map<String, Object> result = new HashMap<>();
         result.put("id", id);
