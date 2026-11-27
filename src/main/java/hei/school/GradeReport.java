@@ -15,6 +15,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import hei.school.domain.GradeRules;
+
 /**
  * Grade transcript of a student.
  */
@@ -56,14 +58,14 @@ public class GradeReport {
             } else {
                 LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
                 line.put("submittedAt", submittedAt);
-                line.put("late", submittedAt.toLocalDate().isAfter(deadline));
+                line.put("late", GradeRules.isLate(deadline, submittedAt));
                 if (row.get("raw_points") == null) {
                     line.put("status", "EN ATTENTE DE CORRECTION");
                     line.put("grade", null);
                 } else {
                     BigDecimal raw = (BigDecimal) row.get("raw_points");
                     BigDecimal max = (BigDecimal) row.get("max_points");
-                    BigDecimal grade = raw.multiply(new BigDecimal("20")).divide(max, 1, RoundingMode.HALF_UP);
+                    BigDecimal grade = GradeRules.penalizedGrade(raw, max, deadline, submittedAt);
                     line.put("status", "CORRIGÉ");
                     line.put("grade", grade);
                     line.put("feedback", row.get("feedback"));

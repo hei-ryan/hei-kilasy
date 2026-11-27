@@ -8,6 +8,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import hei.school.domain.GradeRules;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -60,7 +62,7 @@ public class SubmissionController {
 
         LocalDate deadline = ((java.sql.Date) exercises.get(0).get("deadline")).toLocalDate();
         LocalDateTime now = LocalDateTime.now();
-        boolean late = now.toLocalDate().isAfter(deadline);
+        boolean late = GradeRules.isLate(deadline, now);
 
         jdbcTemplate.update(
                 "INSERT INTO submission (exercise_id, student_id, content, repo_url, submitted_at) VALUES (?, ?, ?, ?, ?)",
@@ -94,12 +96,12 @@ public class SubmissionController {
         result.put("content", row.get("content"));
         result.put("repoUrl", row.get("repo_url"));
         result.put("submittedAt", submittedAt);
-        result.put("late", submittedAt.toLocalDate().isAfter(deadline));
+        result.put("late", GradeRules.isLate(deadline, submittedAt));
         if (row.get("raw_points") != null) {
-            double raw = ((BigDecimal) row.get("raw_points")).doubleValue();
-            double max = ((BigDecimal) row.get("max_points")).doubleValue();
-            result.put("rawPoints", raw);
-            result.put("grade", Math.round(raw / max * 20 * 10) / 10.0);
+            BigDecimal raw = (BigDecimal) row.get("raw_points");
+            BigDecimal max = (BigDecimal) row.get("max_points");
+            result.put("rawPoints", raw.doubleValue());
+            result.put("grade", GradeRules.penalizedGrade(raw, max, deadline, submittedAt).doubleValue());
             result.put("feedback", row.get("feedback"));
         }
         return ResponseEntity.ok(result);
@@ -130,12 +132,11 @@ public class SubmissionController {
         jdbcTemplate.update("UPDATE submission SET raw_points = ?, feedback = ?, graded_at = now() WHERE id = ?",
                 points, feedback, id);
 
-        // grade out of 20
-        double grade = Math.round(points / max * 20 * 10) / 10.0;
-
         LocalDate deadline = ((java.sql.Date) row.get("deadline")).toLocalDate();
         LocalDateTime submittedAt = ((Timestamp) row.get("submitted_at")).toLocalDateTime();
-        boolean late = submittedAt.toLocalDate().isAfter(deadline);
+        boolean late = GradeRules.isLate(deadline, submittedAt);
+        double grade = GradeRules.penalizedGrade(BigDecimal.valueOf(points), (BigDecimal) row.get("max_points"),
+                deadline, submittedAt).doubleValue();
 
         // notify the student by email
         String fullName = (String) row.get("full_name");
