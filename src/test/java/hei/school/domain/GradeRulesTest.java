@@ -17,19 +17,19 @@ class GradeRulesTest {
     private static final BigDecimal TWENTY = new BigDecimal("20");
 
     private static BigDecimal grade(BigDecimal raw, BigDecimal max, LocalDateTime submittedAt) {
-        return GradeRules.penalizedGrade(raw, max, DEADLINE, submittedAt);
+        return GradeRules.penalizedGrade(raw, max, new SubmissionWindow(DEADLINE, null), submittedAt);
     }
 
     @Test
     void onTimeIsNotPenalized() {
         assertEquals(new BigDecimal("16.0"), grade(SIXTEEN, TWENTY, LocalDateTime.of(2026, 11, 10, 23, 59)));
-        assertFalse(GradeRules.isLate(DEADLINE, LocalDateTime.of(2026, 11, 10, 23, 59)));
+        assertFalse(new SubmissionWindow(DEADLINE, null).isLate(LocalDateTime.of(2026, 11, 10, 23, 59)));
     }
 
     @Test
     void twoHoursLateIsOneStartedDay() {
         LocalDateTime submittedAt = LocalDateTime.of(2026, 11, 11, 2, 0);
-        assertTrue(GradeRules.isLate(DEADLINE, submittedAt));
+        assertTrue(new SubmissionWindow(DEADLINE, null).isLate(submittedAt));
         assertEquals(new BigDecimal("14.4"), grade(SIXTEEN, TWENTY, submittedAt));
     }
 

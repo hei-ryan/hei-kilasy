@@ -2,6 +2,8 @@ package hei.school;
 
 import java.time.LocalDate;
 
+import hei.school.domain.SubmissionWindow;
+
 public class Exercise {
 
     private Long id;
@@ -10,6 +12,7 @@ public class Exercise {
     private String description;
     private double maxPoints;
     private LocalDate deadline;
+    private Integer durationMinutes;
 
     public Long getId() {
         return id;
@@ -57,5 +60,17 @@ public class Exercise {
 
     public void setDeadline(LocalDate deadline) {
         this.deadline = deadline;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(Integer durationMinutes) {
+        this.durationMinutes = durationMinutes;
+    }
+
+    public SubmissionWindow window() {
+        return new SubmissionWindow(deadline, durationMinutes);
     }
 }
